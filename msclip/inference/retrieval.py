@@ -70,7 +70,7 @@ def run_inference_retrieval(
             os.path.join(image_paths, f) for f in os.listdir(image_paths)
             if f.lower().endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff", ".npy", ".npz"))
         ]
-    image_tensor = preprocess_and_stack(image_paths, preprocess)
+    image_tensor = preprocess_and_stack(image_paths, preprocess, is_ms=model.channels > 3)
     image_tensor = image_tensor.to(device)
 
     with torch.no_grad(), torch.autocast(device_type=device):

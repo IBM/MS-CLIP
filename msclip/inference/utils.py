@@ -49,6 +49,11 @@ pretrained_cfg = {
         "base_model_str": "ViT-B-16",
         "ckpt": "laion2b_s34b_b88K",
         "channels": 10,
+    },
+    "Llama3-RGB-CLIP-Base": {
+        "base_model_str": "ViT-B-16",
+        "ckpt": "laion2b_s34b_b88K",
+        "channels": 3,
     }
 }
 
@@ -193,8 +198,6 @@ def load_tiff_image(path):
     image = tifffile.imread(path)
     if image.ndim == 2:
         image = image[None, ...]
-    elif image.ndim == 3 and image.shape[-1] <= 10:
-        image = np.moveaxis(image, -1, 0)
     return image
 
 
@@ -216,17 +219,27 @@ def load_jpg_image(path):
     return image
 
 
-def preprocess_and_stack(paths, preprocess):
+def preprocess_and_stack(paths, preprocess, is_ms=False):
     # Handle folder input
     batch = []
 
     for path in paths:
         image = load_image_file(path)
-        if isinstance(image, np.ndarray):  #only multispectral is numpy array
-            if image.shape[2] == 13:
-                image = np.delete(image, [0, 9, 10], axis=2)
-            elif image.shape[2] == 12:
-                image = np.delete(image, [0, 9], axis=2)  # shape: [H, W, C]
+        if not isinstance(image, np.ndarray):
+            image = np.array(image)
+
+        if not is_ms:
+            if image.shape[2] > 3:
+                image = image[..., [3, 2, 1]]
+            if image.max() > 255:
+                image = image.clip(0, 2000) / 2000
+            elif image.max() > 1:
+                image = image / 255
+        elif image.shape[2] == 13:
+            image = np.delete(image, [0, 9, 10], axis=2)
+        elif image.shape[2] == 12:
+            image = np.delete(image, [0, 9], axis=2)  # shape: [H, W, C]
+
         tensor = preprocess(image)  # assume preprocess outputs [C, H, W]
         batch.append(tensor)
     return torch.stack(batch)
@@ -242,36 +255,21 @@ def get_preprocess(is_ms=False, all_bands=False):
                 data_params = pretrained_data_stats["ms_all"]
             else:
                 data_params = pretrained_data_stats["ms"]
-            preprocess_ms = transforms.Compose([
-                transforms.Lambda(lambda x: x.astype(np.float32)),
-
-                transforms.ToTensor(),  #for rgb the values are scaled but not for ms
-                transforms.Resize(
-                    size=data_params["size"],
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                ),
-                transforms.CenterCrop(data_params["size"]),
-                transforms.Normalize(mean=[value for value in data_params["means"]], std=data_params["stds"]),
-            ])
-
-            return preprocess_ms
-
         else:
             data_params = pretrained_data_stats["rgb"]
-            normalize = transforms.Normalize(
-                mean=data_params["means"], std=data_params["stds"]
-            )
-            preprocess_rgb = transforms.Compose([
-                transforms.Resize(
-                    size=data_params["size"],
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                ),
-                transforms.CenterCrop(data_params["size"]),
-                _convert_to_rgb,
-                transforms.ToTensor(),
-                normalize,
-            ])
-            return preprocess_rgb
+
+        preprocess = transforms.Compose([
+            transforms.Lambda(lambda x: x.astype(np.float32)),
+            transforms.ToTensor(),  #for rgb the values are scaled but not for ms
+            transforms.Resize(
+                size=data_params["size"],
+                interpolation=transforms.InterpolationMode.BICUBIC,
+            ),
+            transforms.CenterCrop(data_params["size"]),
+            transforms.Normalize(mean=data_params["means"], std=data_params["stds"]),
+        ])
+
+        return preprocess
 
 
 class DictTransforms:
